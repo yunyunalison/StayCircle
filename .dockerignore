@@ -1,0 +1,58 @@
+# Root .dockerignore to minimize Docker build context
+
+# VCS
+.git
+.gitignore
+
+# OS/IDE
+.DS_Store
+.vscode
+.idea
+.history
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+backend/.venv/
+backend/venv/
+
+# Node/Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/.turbo/
+frontend/.cache/
+frontend/dist/
+frontend/build/
+frontend/out/
+
+# Logs and coverage
+logs/
+*.log
+coverage/
+.coverage
+coverage.lcov
+lcov-report/
+
+# Env files (examples allowed separately)
+.env
+.env.*
+
+# Data and local databases
+data/
+db-data/
+backend/data.db
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker artifacts
+docker-data/
+.vercel/

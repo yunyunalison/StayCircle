@@ -1,0 +1,117 @@
+# StayCircle - Development docker-compose
+# - Hot-reload backend and Next.js frontend
+# - MySQL + Redis for local parity
+# - Two backend containers (backend, backend2) to simulate multi-worker WS fan-out
+version: "3.9"
+name: staycircle-dev
+
+services:
+  # FastAPI backend (dev) with Alembic auto-migrate and Uvicorn reload
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - UVICORN_WORKERS=1
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://staycircle:staycircle@mysql:3306/staycircle}
+      - REDIS_ENABLED=${REDIS_ENABLED:-false}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      - RATE_LIMIT_LOGIN_PER_WINDOW=${RATE_LIMIT_LOGIN_PER_WINDOW:-10}
+      - RATE_LIMIT_SIGNUP_PER_WINDOW=${RATE_LIMIT_SIGNUP_PER_WINDOW:-5}
+      - RATE_LIMIT_WRITE_PER_WINDOW=${RATE_LIMIT_WRITE_PER_WINDOW:-30}
+    command: sh -c "alembic -c app/alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app:rw
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Image-level HEALTHCHECK already defined in backend/Dockerfile
+
+  # Second backend instance to emulate multiple app processes during development
+  backend2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - UVICORN_WORKERS=1
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://staycircle:staycircle@mysql:3306/staycircle}
+      - REDIS_ENABLED=${REDIS_ENABLED:-false}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      - RATE_LIMIT_LOGIN_PER_WINDOW=${RATE_LIMIT_LOGIN_PER_WINDOW:-10}
+      - RATE_LIMIT_SIGNUP_PER_WINDOW=${RATE_LIMIT_SIGNUP_PER_WINDOW:-5}
+      - RATE_LIMIT_WRITE_PER_WINDOW=${RATE_LIMIT_WRITE_PER_WINDOW:-30}
+    command: sh -c "alembic -c app/alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend/app:/app/app:rw
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      - MYSQL_DATABASE=${MYSQL_DB:-staycircle}
+      - MYSQL_USER=${MYSQL_USER:-staycircle}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-staycircle}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-devroot}
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # Next.js frontend with dev server and live reload
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: deps
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    command: sh -c "npm ci && npm run dev -- -p 3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app:rw
+      - /app/node_modules
+    depends_on:
+      - backend
+
+# Named volumes for stateful services
+volumes:
+  mysql_data:

@@ -1,0 +1,87 @@
+# StayCircle - Production-like docker-compose
+# - FastAPI backend with Alembic migration on startup
+# - MySQL + Redis services
+# - Next.js frontend served on port 3000
+# Notes:
+# - This compose uses defaults suitable for local demos; tune env variables for real deployments.
+version: "3.9"
+name: staycircle-prod
+
+services:
+  # FastAPI backend (prod-ish) with Alembic auto-migrate and multiple workers
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-4}
+      # Default to MySQL DSN in prod compose; override via .env if needed
+      - DATABASE_URL=${DATABASE_URL:-mysql+pymysql://staycircle:staycircle@mysql:3306/staycircle}
+      - REDIS_ENABLED=${REDIS_ENABLED:-false}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - RATE_LIMIT_WINDOW_SECONDS=${RATE_LIMIT_WINDOW_SECONDS:-60}
+      - RATE_LIMIT_LOGIN_PER_WINDOW=${RATE_LIMIT_LOGIN_PER_WINDOW:-10}
+      - RATE_LIMIT_SIGNUP_PER_WINDOW=${RATE_LIMIT_SIGNUP_PER_WINDOW:-5}
+      - RATE_LIMIT_WRITE_PER_WINDOW=${RATE_LIMIT_WRITE_PER_WINDOW:-30}
+    volumes:
+      - backend_data:/data
+    command: sh -c "alembic -c app/alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-4}"
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Backend image defines its own HEALTHCHECK (/healthz)
+
+  mysql:
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      - MYSQL_DATABASE=${MYSQL_DB:-staycircle}
+      - MYSQL_USER=${MYSQL_USER:-staycircle}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-staycircle}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-devroot}
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  # Next.js frontend running in production mode
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+# Named volumes for stateful services
+volumes:
+  backend_data:
+  mysql_data:

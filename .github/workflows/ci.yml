@@ -1,4 +1,4 @@
-name: Docker Build (Backend + Frontend)
+name: CI (Tests + Docker Build)
 
 on:
   push:
@@ -13,10 +13,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  pytest-backend:
+    name: Run backend pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.x"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run pytest
+        working-directory: backend
+        env:
+          DATABASE_URL: sqlite:///./test.db
+          REDIS_ENABLED: "false"
+          STAYCIRCLE_JWT_SECRET: ci-secret
+        run: |
+          python -m pytest -q
+
   build-backend:
     name: Build Backend Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: pytest-backend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,7 +63,6 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Trusted contexts (pushes and PRs from same repo): allow cache save
       - name: Build backend image (trusted, cache save)
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v5
@@ -35,7 +73,6 @@ jobs:
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
-      # Untrusted contexts (PRs from forks): skip cache save to avoid 403
       - name: Build backend image (forked PR, no cache save)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: docker/build-push-action@v5
@@ -43,11 +80,13 @@ jobs:
           context: ./backend
           file: ./backend/Dockerfile
           push: false
+          cache-from: type=gha,scope=backend
 
   build-frontend:
     name: Build Frontend Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: pytest-backend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +94,6 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      # Trusted contexts (pushes and PRs from same repo): allow cache save
       - name: Build frontend image (trusted, cache save)
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v5
@@ -66,7 +104,6 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,mode=max,scope=frontend
 
-      # Untrusted contexts (PRs from forks): skip cache save to avoid 403
       - name: Build frontend image (forked PR, no cache save)
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
         uses: docker/build-push-action@v5
@@ -74,3 +111,4 @@ jobs:
           context: ./frontend
           file: ./frontend/Dockerfile
           push: false
+          cache-from: type=gha,scope=frontend
